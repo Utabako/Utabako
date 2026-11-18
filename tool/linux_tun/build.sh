@@ -35,8 +35,11 @@ if [[ $(git -C "$source_dir" rev-parse --verify HEAD 2>/dev/null || true) != "$c
 fi
 
 cd "$source_dir"
+python3 "$root/tool/linux_tun/recovery_overlay.py" "$output/overlay"
+overlay="$output/overlay/overlay.json"
 ldflags="-X github.com/sagernet/sing-box/constant.Version=$version -checklinkname=0"
-go build -mod=readonly -trimpath -buildvcs=false -ldflags "$ldflags" -tags "$tags" -o "$output/boxdd" ./experimental/boxdd
+go build -modfile "$output/overlay/recovery.mod" -overlay "$overlay" -mod=readonly -trimpath -buildvcs=false -ldflags "$ldflags" -tags "$tags" -o "$output/boxdd-core" ./experimental/boxdd
+go build -modfile "$output/overlay/recovery.mod" -mod=readonly -trimpath -buildvcs=false -o "$output/boxdd" "$root/tool/linux_tun/supervisor.go"
 cp "$root/tool/linux_tun/main.go" experimental/boxdd/desktop_service{,_grpc}.pb.go "$output/client/"
 go build -mod=readonly -trimpath -buildvcs=false -o "$output/diagnostics" "$output/client/"*.go
 

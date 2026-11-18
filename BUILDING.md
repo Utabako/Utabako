@@ -31,8 +31,10 @@ Gradle 会从固定的 [Utabako Core](https://github.com/Utabako/utabako-core) �
 
 ## Linux TUN 诊断原型
 
-使用 Go 1.25.8、C/C++ 编译器、`jq` 和 FVM，运行 `bash tool/linux_tun/build.sh`。产物位于 `build/linux-tun/`：`boxdd`、`diagnostics` 和 `web/`。
+使用 Go 1.25.8、C/C++ 编译器、Python 3、`jq` 和 FVM，运行 `bash tool/linux_tun/build.sh`。产物位于 `build/linux-tun/`：`boxdd` 监督进程、`boxdd-core` 内核、`diagnostics` 和 `web/`。
 
 请在专用虚拟机或隔离网络命名空间运行 TUN。启动 `boxdd run --working-directory <状态目录> --socket <套接字>` 后，用 `diagnostics -socket <套接字> start <配置文件>` 导入并启动配置；用 `diagnostics -socket <套接字> stop` 正常断开。
 
-用 `diagnostics -socket <套接字> serve <web目录> 127.0.0.1:8766 <新链接文件>` 打开诊断服务。在本机浏览器打开链接文件中的私有地址。日志时间为诊断服务接收时间。当前内核被强制终止后会残留路由规则和防火墙规则，原型应在隔离环境运行。
+用 `diagnostics -socket <套接字> serve <web目录> 127.0.0.1:8766 <新链接文件>` 打开诊断服务。在本机浏览器打开链接文件中的私有地址。日志时间为诊断服务接收时间。
+
+在支持无特权用户命名空间并装有 `ip`、`nft`、`curl` 和 `dig` 的 Linux 上，运行 `bash tool/linux_tun/check_recovery.sh` 可在隔离网络中验证正常停止与强杀内核后的网络恢复。`boxdd` 会在内核退出后清理本次运行创建的路由规则和 nftables 对象，再返回内核退出状态。原型支持同一网络命名空间内的单个原生 TUN；自动重定向使用 nftables。监督进程也被强杀、或整组进程被强杀的场景尚未接入恢复。
