@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import 'diagnostic_widgets.dart';
 
-enum DiagnosticLogLevel { info, warn, error }
+enum DiagnosticLogLevel { trace, debug, info, warn, error, fatal, panic }
 
 class DiagnosticLog {
   const DiagnosticLog(this.time, this.level, this.source, this.message);
@@ -172,9 +172,12 @@ class _DiagnosticLogsPanelState extends State<DiagnosticLogsPanel> {
   }) {
     final expanded = nearby.isNotEmpty;
     final severity = switch (log.level) {
+      DiagnosticLogLevel.trace || DiagnosticLogLevel.debug => colors.muted,
       DiagnosticLogLevel.info => colors.down,
       DiagnosticLogLevel.warn => colors.warn,
-      DiagnosticLogLevel.error => colors.bad,
+      DiagnosticLogLevel.error ||
+      DiagnosticLogLevel.fatal ||
+      DiagnosticLogLevel.panic => colors.bad,
     };
     final time = Text(
       log.timeLabel,
@@ -201,7 +204,7 @@ class _DiagnosticLogsPanelState extends State<DiagnosticLogsPanel> {
         Material(
           color: expanded
               ? colors.accentSoft
-              : log.level == DiagnosticLogLevel.error
+              : log.level.index >= DiagnosticLogLevel.error.index
               ? colors.bad.withValues(alpha: .07)
               : alternate
               ? colors.background.withValues(alpha: .32)

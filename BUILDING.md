@@ -28,3 +28,11 @@ fvm flutter build apk --debug --target-platform android-arm64 --no-pub
 ## 原生内核
 
 Gradle 会从固定的 [Utabako Core](https://github.com/Utabako/utabako-core) 提交构建原生内核，并从 NDK 获取 C++ 运行库。源码和工具缓存在 `.dart_tool/libbox/`，AAR、运行库及构建记录生成至 `build/app/libbox/`。固定源码、工具版本和构建标签见 [tool/libbox.json](tool/libbox.json)。
+
+## Linux TUN 诊断原型
+
+使用 Go 1.25.8、C/C++ 编译器、`jq` 和 FVM，运行 `bash tool/linux_tun/build.sh`。产物位于 `build/linux-tun/`：`boxdd`、`diagnostics` 和 `web/`。
+
+请在专用虚拟机或隔离网络命名空间运行 TUN。启动 `boxdd run --working-directory <状态目录> --socket <套接字>` 后，用 `diagnostics -socket <套接字> start <配置文件>` 导入并启动配置；用 `diagnostics -socket <套接字> stop` 正常断开。
+
+用 `diagnostics -socket <套接字> serve <web目录> 127.0.0.1:8766 <新链接文件>` 打开诊断服务。在本机浏览器打开链接文件中的私有地址。日志时间为诊断服务接收时间。当前内核被强制终止后会残留路由规则和防火墙规则，原型应在隔离环境运行。

@@ -5,15 +5,20 @@ import 'package:utabako/ui/diagnostics/connections_panel.dart';
 import 'package:utabako/ui/diagnostics/diagnostic_logs_panel.dart';
 import 'package:utabako/ui/theme/app_theme.dart';
 
+import 'live_diagnostics.dart';
+
+const _live = bool.fromEnvironment('UTABAKO_LIVE');
+
 void main() {
+  final diagnostics = _live ? LiveDiagnostics() : null;
   runApp(
     MaterialApp(
-      title: 'Utabako · 诊断预览',
+      title: _live ? 'Utabako · Linux 诊断' : 'Utabako · 诊断预览',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.dark,
-      home: const _Preview(),
+      home: _Preview(diagnostics: diagnostics),
     ),
   );
 }
@@ -212,7 +217,9 @@ const _messages = [
 ];
 
 class _Preview extends StatefulWidget {
-  const _Preview();
+  const _Preview({required this.diagnostics});
+
+  final LiveDiagnostics? diagnostics;
 
   @override
   State<_Preview> createState() => _PreviewState();
@@ -227,10 +234,21 @@ class _PreviewState extends State<_Preview> {
   int _page = 0;
   int _tick = 0;
   String? _connectionQuery;
+  bool _loading = false;
+  String? _liveError = _live ? '正在连接 Linux 内核…' : null;
 
   @override
   void initState() {
     super.initState();
+    if (_live) {
+      _logs = [];
+      _timer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _refreshLive(),
+      );
+      unawaited(_refreshLive());
+      return;
+    }
     final now = DateTime.now();
     for (final (i, sample) in _connections.indexed) {
       final (
@@ -329,6 +347,45 @@ class _PreviewState extends State<_Preview> {
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _advance());
   }
 
+  Future<void> _refreshLive() async {
+    if (_loading) return;
+    _loading = true;
+    try {
+      final snapshot = await widget.diagnostics!.snapshot();
+      if (!mounted) return;
+      setState(() {
+        _active
+          ..clear()
+          ..addAll(snapshot.active);
+        _closed
+          ..clear()
+          ..addAll(snapshot.closed);
+        _logs = snapshot.logs;
+        _liveError = snapshot.error;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _liveError = '无法读取 Linux 内核：$error');
+    } finally {
+      _loading = false;
+    }
+  }
+
+  Future<void> _disconnect(String id) async {
+    if (!_live) {
+      setState(() => _moveToClosed(id));
+      return;
+    }
+    try {
+      await widget.diagnostics!.close(id);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('断开失败：$error')));
+      }
+    }
+  }
+
   void _advance() {
     setState(() {
       final (level, source, message) =
@@ -408,7 +465,7 @@ class _PreviewState extends State<_Preview> {
             ConnectionsPanel(
               active: _active,
               closed: _closed,
-              onClose: (id) => setState(() => _moveToClosed(id)),
+              onClose: _disconnect,
               onSearchLogs: (host) => setState(() {
                 _connectionQuery = host;
                 _page = 1;
@@ -492,7 +549,7 @@ class _PreviewState extends State<_Preview> {
                         Padding(
                           padding: const EdgeInsets.fromLTRB(6, 4, 6, 2),
                           child: Text(
-                            '样例流量',
+                            _live ? 'Linux 内核' : '样例流量',
                             style: TextStyle(color: colors.muted, fontSize: 11),
                           ),
                         ),
@@ -501,7 +558,22 @@ class _PreviewState extends State<_Preview> {
                   ),
                   const VerticalDivider(width: 1),
                 ],
-                Expanded(child: panel),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_liveError case final message?)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: Text(
+                            message,
+                            style: TextStyle(color: colors.warn),
+                          ),
+                        ),
+                      Expanded(child: panel),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),

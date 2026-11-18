@@ -176,12 +176,7 @@ class _ConnectionsPanelState extends State<ConnectionsPanel> {
     });
   }
 
-  void _disconnect(DiagnosticConnection row) {
-    widget.onClose(row.id);
-    if (!_showClosed && _heldOrder != null) {
-      setState(() => _heldOrder!.removeWhere((item) => item.id == row.id));
-    }
-  }
+  void _disconnect(DiagnosticConnection row) => widget.onClose(row.id);
 
   Widget _disconnectButton(DiagnosticConnection row) => IconButton(
     tooltip: '断开 ${row.host}',
