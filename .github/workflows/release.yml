@@ -1,0 +1,107 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: android-release-${{ github.ref }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      core-source: ${{ steps.versions.outputs.core-source }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@v4
+      - name: Check release tag and read pinned versions
+        id: versions
+        run: |
+          version=$(awk '$1 == "version:" {print $2; exit}' pubspec.yaml)
+          if [[ "$GITHUB_REF_NAME" != "v${version%%+*}" ]]; then
+            echo 'Release tag must match the version name in pubspec.yaml.' >&2
+            exit 1
+          fi
+          go=$(jq -er '.go_version | ltrimstr("go")' tool/libbox.json)
+          ndk=$(jq -er '.ndk_version' tool/libbox.json)
+          core_source=$(jq -er '(.repository | rtrimstr(".git")) + "/tree/" + .commit' tool/libbox.json)
+          printf 'go=%s\nndk=%s\ncore-source=%s\n' "$go" "$ndk" "$core_source" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: .fvmrc
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.versions.outputs.go }}
+          cache: false
+      - name: Prepare Flutter and Android SDK
+        env:
+          NDK_VERSION: ${{ steps.versions.outputs.ndk }}
+        run: |
+          dart pub global activate fvm 4.0.5
+          fvm install
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' "ndk;$NDK_VERSION"
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
+      - name: Build and verify signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_PROPERTIES: ${{ secrets.ANDROID_KEY_PROPERTIES }}
+        run: |
+          : "${KEYSTORE_BASE64:?Configure ANDROID_KEYSTORE_BASE64}"
+          : "${KEY_PROPERTIES:?Configure ANDROID_KEY_PROPERTIES}"
+          keystore="$RUNNER_TEMP/utabako-release.keystore"
+          trap 'rm -f -- android/key.properties "$keystore"' EXIT
+          (
+            umask 077
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            printf '%s\nstoreFile=%s\n' "$KEY_PROPERTIES" "$keystore" > android/key.properties
+          )
+          unset KEYSTORE_BASE64 KEY_PROPERTIES
+          bash tool/release.sh
+          apk="Utabako-${GITHUB_REF_NAME}-arm64-v8a.apk"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "dist/$apk"
+          (
+            cd dist
+            sha256sum "$apk" > "$apk.sha256"
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CORE_SOURCE: ${{ needs.build.outputs.core-source }}
+        run: |
+          apk="Utabako-${GITHUB_REF_NAME}-arm64-v8a.apk"
+          gh release create "$GITHUB_REF_NAME" "$apk" "$apk.sha256" \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME" \
+            --notes "原生内核源码：$CORE_SOURCE"
