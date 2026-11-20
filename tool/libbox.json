@@ -1,9 +1,9 @@
 {
   "repository": "https://github.com/Utabako/utabako-core.git",
-  "commit": "7b2305d305879d38406de9e251f79e4ac29d5547",
-  "version": "1.14.4-7b2305d30",
+  "commit": "4a50d6b60bb4c672731bda2837d32b518896e617",
+  "version": "1.14.4-4a50d6b60",
   "upstream_commit": "b61ad737e801cfedfbed89e78f3b8ac8a9189515",
-  "source_h1": "h1:72iJsOhmixQluQgNRaaZ1B6OR6Igvm/pKw2XrYyPKzM=",
+  "source_h1": "h1:Z+wxQUJSZ2oOhiwVxyYYixLXksH2SUu90jjY1gEtBEM=",
   "go_zt_commit": "01b5bf689bb82a0843a3fe687f7491adb0fac9e3",
   "go_version": "go1.25.8",
   "gomobile_version": "v0.1.12",

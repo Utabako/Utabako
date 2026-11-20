@@ -6,6 +6,8 @@ import 'dart:io';
 
 enum VpnState { stopped, starting, started, stopping, error }
 
+enum VpnStartupStage { waitingForZeroTierAuthorization, loadingRuleSets }
+
 class UrlTestResult {
   final int timestampSeconds;
   final int delayMillis;
@@ -238,6 +240,7 @@ class VpnService extends ChangeNotifier {
   static const _channel = MethodChannel('io.github.utabako/vpn');
 
   VpnState _state = VpnState.stopped;
+  VpnStartupStage? _startupStage;
   String? _configJson;
   String _log = '';
   String _coreVersion = '';
@@ -264,6 +267,7 @@ class VpnService extends ChangeNotifier {
   bool _sampling = false;
 
   VpnState get state => _state;
+  VpnStartupStage? get startupStage => _startupStage;
   String? get configJson => _configJson;
   String get log => _log;
   String get coreVersion => _coreVersion;
@@ -379,14 +383,17 @@ class VpnService extends ChangeNotifier {
             ? state.substring('error:'.length)
             : 'Unknown VPN state: $state';
     }
+    if (_state != VpnState.starting) _startupStage = null;
     if (_state == VpnState.started && !wasStarted) {
       _loadStartedAt();
     } else if (_state != VpnState.started) {
       _pendingOutboundTests.clear();
       _outboundSnapshotRevision++;
       _startedAt = null;
-      _zeroTierEndpoints = const [];
-      _zeroTierError = null;
+      if (_state != VpnState.starting) {
+        _zeroTierEndpoints = const [];
+        _zeroTierError = null;
+      }
     }
     _syncSampler();
     if (notify) notifyListeners();
@@ -402,7 +409,7 @@ class VpnService extends ChangeNotifier {
     } on PlatformException catch (_) {}
   }
 
-  /// The UI shell reports app foreground state; sampling runs only while started and in foreground.
+  /// The UI shell reports app foreground state; sampling pauses in the background.
   void setForeground(bool foreground) {
     if (_foreground == foreground) return;
     _foreground = foreground;
@@ -411,7 +418,9 @@ class VpnService extends ChangeNotifier {
 
   void _syncSampler() {
     if (_state != VpnState.started) _trafficHistory = const [];
-    final shouldRun = _foreground && _state == VpnState.started;
+    final shouldRun =
+        _foreground &&
+        (_state == VpnState.starting || _state == VpnState.started);
     if (shouldRun == (_sampler != null)) return;
     if (shouldRun) {
       _samplerTicks = 0;
@@ -427,12 +436,18 @@ class VpnService extends ChangeNotifier {
     if (_sampling) return;
     _sampling = true;
     try {
-      final history = await _queryTrafficStats();
-      if (_sampler != sampler) return;
-      if (history != null) _trafficHistory = history;
-      if (_samplerTicks++ % 2 == 0) await _fetchZeroTierStatus();
-      if (_sampler != sampler) return;
-      notifyListeners();
+      if (_state == VpnState.starting) {
+        final stage = await _queryStartupStage();
+        if (_sampler != sampler || _state != VpnState.starting) return;
+        _startupStage = stage;
+        await _fetchZeroTierStatus();
+      } else {
+        final history = await _queryTrafficStats();
+        if (_sampler != sampler || _state != VpnState.started) return;
+        if (history != null) _trafficHistory = history;
+        if (_samplerTicks++ % 2 == 0) await _fetchZeroTierStatus();
+      }
+      if (_sampler == sampler) notifyListeners();
     } finally {
       _sampling = false;
     }
@@ -474,15 +489,15 @@ class VpnService extends ChangeNotifier {
     try {
       await _channel.invokeMethod('start', {'config': _configJson});
     } on PlatformException catch (e) {
-      _log = 'Start failed: ${e.message}';
-      _state = VpnState.error;
-      _syncSampler();
-      notifyListeners();
+      if (_state == VpnState.starting) {
+        _applyNativeState('error:Start failed: ${e.message}');
+      }
     }
   }
 
   Future<void> stop() async {
-    if (_state != VpnState.started) return;
+    final previous = _state;
+    if (previous != VpnState.started && previous != VpnState.starting) return;
     _state = VpnState.stopping;
     _syncSampler();
     notifyListeners();
@@ -490,10 +505,12 @@ class VpnService extends ChangeNotifier {
     try {
       await _channel.invokeMethod('stop');
     } on PlatformException catch (e) {
-      _log = 'Stop failed: ${e.message}';
-      _state = VpnState.started;
-      _syncSampler();
-      notifyListeners();
+      if (_state == VpnState.stopping) {
+        _log = 'Stop failed: ${e.message}';
+        _state = previous;
+        _syncSampler();
+        notifyListeners();
+      }
     }
   }
 
@@ -770,9 +787,25 @@ class VpnService extends ChangeNotifier {
     }
   }
 
+  Future<VpnStartupStage?> _queryStartupStage() async {
+    try {
+      final stage = await _channel.invokeMethod<String>('getStartupStage');
+      return switch (stage) {
+        'waiting-zerotier-authorization' =>
+          VpnStartupStage.waitingForZeroTierAuthorization,
+        'loading-rule-sets' => VpnStartupStage.loadingRuleSets,
+        _ => null,
+      };
+    } on PlatformException {
+      return null;
+    }
+  }
+
   Future<void> _fetchZeroTierStatus() async {
+    final sampler = _sampler;
     try {
       final raw = await _channel.invokeMethod<String>('zerotierStatus');
+      if (sampler != _sampler) return;
       _zeroTierEndpoints = (jsonDecode(raw!) as List<dynamic>)
           .map(
             (e) => ZeroTierEndpointStatus.fromJson(e as Map<String, dynamic>),
@@ -780,6 +813,7 @@ class VpnService extends ChangeNotifier {
           .toList();
       _zeroTierError = null;
     } on PlatformException catch (e) {
+      if (sampler != _sampler) return;
       _zeroTierError = e.message ?? 'ZeroTier 状态读取失败';
     }
   }

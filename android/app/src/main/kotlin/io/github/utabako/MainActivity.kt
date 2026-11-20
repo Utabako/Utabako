@@ -146,6 +146,7 @@ class MainActivity : FlutterActivity() {
                     null
                 }
                 "getState" -> result.success(VpnService.currentState)
+                "getStartupStage" -> runIo(result) { VpnService.startupStage }
                 "getStartedAt" -> result.success(VpnService.startedAtMillis)
                 "queryOutbounds" -> runIo(result) {
                     val groups = VpnService.cachedGroups
@@ -329,27 +330,31 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopVpn() {
-        VpnService.stop(this)
+        if (pendingConfig != null) {
+            pendingConfig = null
+            channel?.invokeMethod("onStateChanged", VpnService.currentState)
+        } else {
+            VpnService.stop(this)
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != VPN_PREPARE_REQUEST) return
+        val config = pendingConfig ?: return
+        pendingConfig = null
         if (resultCode == Activity.RESULT_OK) {
-            pendingConfig?.let { config ->
-                try {
-                    VpnService.start(this, config)
-                } catch (error: Exception) {
-                    channel?.invokeMethod(
-                        "onStateChanged",
-                        "error:${error.message ?: "VPN start failed"}"
-                    )
-                }
+            try {
+                VpnService.start(this, config)
+            } catch (error: Exception) {
+                channel?.invokeMethod(
+                    "onStateChanged",
+                    "error:${error.message ?: "VPN start failed"}"
+                )
             }
         } else {
             channel?.invokeMethod("onStateChanged", "error:VPN permission denied")
         }
-        pendingConfig = null
     }
 
     override fun onResume() {

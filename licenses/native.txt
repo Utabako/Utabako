@@ -5,8 +5,8 @@ Original license files and source comments follow; paths are relative to each co
 
 ================================================================================
 Component: github.com/sagernet/sing-box
-Version: 7b2305d305879d38406de9e251f79e4ac29d5547
-h1: h1:72iJsOhmixQluQgNRaaZ1B6OR6Igvm/pKw2XrYyPKzM=
+Version: 4a50d6b60bb4c672731bda2837d32b518896e617
+h1: h1:Z+wxQUJSZ2oOhiwVxyYYixLXksH2SUu90jjY1gEtBEM=
 
 --- LICENSE ---
 Copyright (C) 2022 by nekohasekai <contact-sagernet@sekai.icu>
