@@ -26,6 +26,7 @@ void main() {
   late bool zeroTierFailure;
   late String trafficResponse;
   late String initialState;
+  late String startupStage;
   late bool trafficFailure;
   Completer<String>? pendingTraffic;
   Completer<String>? pendingProbe;
@@ -41,6 +42,7 @@ void main() {
     outboundFailure = false;
     zeroTierFailure = false;
     initialState = 'stopped';
+    startupStage = '';
     trafficFailure = false;
     pendingTraffic = null;
     pendingProbe = null;
@@ -70,6 +72,7 @@ void main() {
             'getAutostart' => false,
             'getPerAppProxy' => '{"mode":"all","packages":[]}',
             'getState' => initialState,
+            'getStartupStage' => startupStage,
             'getThemeMode' => 'system',
             'queryOutbounds' => outboundsResponse,
             'queryTrafficStats' => trafficResponse,
@@ -166,6 +169,60 @@ void main() {
       '未连接',
     );
     expect(find.text('60 秒峰值 0'), findsOneWidget);
+    await closeApp(tester, vpn);
+  });
+
+  testWidgets('shows the waiting node and continues the same VPN startup', (
+    tester,
+  ) async {
+    profilesResponse =
+        '{"activeId":"p","profiles":[{"id":"p","name":"内网规则","updatedAt":0}]}';
+    startupStage = 'waiting-zerotier-authorization';
+    zeroTierResponse =
+        '[{"tag":"家庭网络","node_id":"abcdef0123","network_id":"test",'
+        '"network_status":"ACCESS_DENIED","online":true,"addresses":[],'
+        '"peers":[],"routes":[]}]';
+    final vpn = await _pumpApp(tester);
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(find.text('等待 ZeroTier 授权'), findsOneWidget);
+    expect(find.text('已连接'), findsNothing);
+    expect(calls.where((call) => call.method == 'queryTrafficStats'), isEmpty);
+
+    await tester.tap(find.text('查看节点 ID'));
+    await tester.pumpAndSettle();
+    expect(find.text('abcdef0123'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    startupStage = 'loading-rule-sets';
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('正在加载规则…'), findsOneWidget);
+    expect(find.text('已连接'), findsNothing);
+    await sendNativeState('started');
+    await tester.pumpAndSettle();
+    expect(find.text('已连接'), findsOneWidget);
+    expect(calls.where((call) => call.method == 'start'), hasLength(1));
+    await closeApp(tester, vpn);
+  });
+
+  testWidgets('sends native stop when cancelling ZeroTier authorization', (
+    tester,
+  ) async {
+    final vpn = await _pumpApp(tester);
+    startupStage = 'waiting-zerotier-authorization';
+    await sendNativeState('starting');
+    await tester.pumpAndSettle();
+    expect(find.text('等待 ZeroTier 授权'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(calls.where((call) => call.method == 'stop'), hasLength(1));
+    await sendNativeState('stopped');
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('等待 ZeroTier 授权'), findsNothing);
+    expect(vpn.state, VpnState.stopped);
     await closeApp(tester, vpn);
   });
 

@@ -104,7 +104,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               left: 0,
               right: 0,
               bottom: 0,
-              child: _ConnectionBar(active: homeActive),
+              child: _ConnectionBar(
+                active: homeActive,
+                onOpenZeroTier: _openZeroTier,
+              ),
             ),
         ],
       ),
@@ -128,14 +131,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
 class _ConnectionBar extends StatelessWidget {
   final bool active;
+  final VoidCallback onOpenZeroTier;
 
-  const _ConnectionBar({required this.active});
+  const _ConnectionBar({required this.active, required this.onOpenZeroTier});
 
   @override
   Widget build(BuildContext context) {
-    final (state, startedAt, profile, error) = context.select(
+    final (state, stage, startedAt, profile, error) = context.select(
       (VpnService vpn) => (
         vpn.state,
+        vpn.startupStage,
         vpn.startedAt,
         vpn.profiles
             .where((profile) => profile.id == vpn.activeProfileId)
@@ -146,10 +151,16 @@ class _ConnectionBar extends StatelessWidget {
     final vpn = context.read<VpnService>();
     final colors = NexColors.of(context);
     final profileName = profile?.name ?? '没有配置';
-    final busy = state == VpnState.starting || state == VpnState.stopping;
+    final waitingAuthorization =
+        state == VpnState.starting &&
+        stage == VpnStartupStage.waitingForZeroTierAuthorization;
     final label = switch (state) {
       VpnState.stopped => '未连接',
-      VpnState.starting => '正在连接…',
+      VpnState.starting => switch (stage) {
+        VpnStartupStage.waitingForZeroTierAuthorization => '等待 ZeroTier 授权',
+        VpnStartupStage.loadingRuleSets => '正在加载规则…',
+        null => '正在连接…',
+      },
       VpnState.started => '已连接',
       VpnState.stopping => '正在断开…',
       VpnState.error => '错误',
@@ -167,6 +178,14 @@ class _ConnectionBar extends StatelessWidget {
             startedAt: startedAt,
             profileName: profileName,
           )
+        : waitingAuthorization
+        ? InkWell(
+            onTap: onOpenZeroTier,
+            child: Text(
+              '查看节点 ID',
+              style: TextStyle(color: colors.down, fontSize: 13),
+            ),
+          )
         : Text(
             state == VpnState.error ? error! : profileName,
             maxLines: state == VpnState.error ? 3 : 1,
@@ -176,14 +195,21 @@ class _ConnectionBar extends StatelessWidget {
               fontSize: 12,
             ),
           );
-    final button = state == VpnState.started
+    final button = state == VpnState.started || state == VpnState.starting
         ? FilledButton.tonalIcon(
             onPressed: vpn.stop,
-            icon: const Icon(Icons.power_settings_new, size: 18),
-            label: const Text('断开'),
+            icon: Icon(
+              state == VpnState.started
+                  ? Icons.power_settings_new
+                  : Icons.close,
+              size: 18,
+            ),
+            label: Text(state == VpnState.started ? '断开' : '取消'),
           )
         : FilledButton.icon(
-            onPressed: busy || profile == null ? null : vpn.start,
+            onPressed: state == VpnState.stopping || profile == null
+                ? null
+                : vpn.start,
             icon: const Icon(Icons.power_settings_new, size: 18),
             label: const Text('连接'),
           );

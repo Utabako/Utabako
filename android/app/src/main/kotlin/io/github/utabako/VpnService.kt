@@ -30,6 +30,18 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
         ERROR("error")
     }
 
+    private class Startup(val configFile: File, val policyJson: String) {
+        val options = OverrideOptions()
+        @Volatile var server: CommandServer? = null
+        @Volatile var cancelled = false
+            private set
+
+        fun cancel() {
+            cancelled = true
+            options.cancel()
+        }
+    }
+
     companion object {
         const val TAG = "UtabakoVpn"
         const val ACTION_START = "io.github.utabako.START"
@@ -55,6 +67,12 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
 
         val isRunning: Boolean
             get() = lifecycleState == LifecycleState.STARTED
+
+        @Volatile
+        private var startup: Startup? = null
+
+        val startupStage: String
+            get() = startup?.server?.startupStage.orEmpty()
 
         /** Wall-clock time (epoch millis) when the service last entered STARTED; null while not started. */
         @Volatile
@@ -169,15 +187,17 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
                     stopSelfResult(startId)
                     return START_NOT_STICKY
                 }
-                lifecycleExecutor.execute {
-                    startBox(File(configPath), policyJson, startId)
+                if (startup != null || isRunning) {
+                    File(configPath).delete()
+                    return START_NOT_STICKY
                 }
+                val attempt = Startup(File(configPath), policyJson)
+                startup = attempt
+                lifecycleExecutor.execute { startBox(attempt, startId) }
             }
-            ACTION_STOP -> lifecycleExecutor.execute {
-                stopBox(startId)
-            }
-            else -> lifecycleExecutor.execute {
-                stopBox(startId)
+            else -> {
+                cancelStartup()
+                lifecycleExecutor.execute { stopBox(startId) }
             }
         }
         return START_NOT_STICKY
@@ -200,10 +220,10 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
         )
         val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
             .setContentTitle("Utabako")
-            .setContentText("VPN is running")
+            .setContentText("VPN 服务")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(openIntent)
-            .addAction(android.R.drawable.ic_delete, "Disconnect", disconnectIntent)
+            .addAction(android.R.drawable.ic_delete, "停止", disconnectIntent)
             .setOngoing(true)
             .build()
         startForeground(
@@ -214,42 +234,35 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
     }
 
     @Synchronized
-    private fun startBox(configFile: File, policyJson: String, startId: Int) {
-        if (lifecycleState == LifecycleState.STARTED ||
-            lifecycleState == LifecycleState.STARTING
-        ) {
-            configFile.delete()
-            return
-        }
-
-        val generation = synchronized(commandClientLock) {
-            trafficHistory = emptyList()
-            ++runGeneration
-        }
-        publishState(LifecycleState.STARTING)
+    private fun startBox(attempt: Startup, startId: Int) {
         try {
-            val config = configFile.readText()
+            val generation = synchronized(commandClientLock) {
+                if (attempt.cancelled) return
+                trafficHistory = emptyList()
+                publishState(LifecycleState.STARTING)
+                ++runGeneration
+            }
+            val config = attempt.configFile.readText()
             LibboxRuntime.ensureInitialized(this)
-            perAppProxyPolicy = PerAppProxyPolicy.parse(policyJson)
+            perAppProxyPolicy = PerAppProxyPolicy.parse(attempt.policyJson)
             disableIpv6 = getSharedPreferences("utabako", MODE_PRIVATE)
                 .getBoolean("disableIpv6", false)
 
             val server = Libbox.newCommandServer(this, this)
             commandServer = server
+            attempt.server = server
             server.start()
-            val overrides = OverrideOptions().apply {
-                disableIPv6 = disableIpv6
-            }
-            server.startOrReloadService(config, overrides)
+            attempt.options.disableIPv6 = disableIpv6
+            server.startOrReloadService(config, attempt.options)
 
-            if (generation != runGeneration) {
-                cleanupResources()
-                return
+            synchronized(commandClientLock) {
+                if (attempt.cancelled || generation != runGeneration) return
+                publishState(LifecycleState.STARTED)
             }
-            publishState(LifecycleState.STARTED)
             Log.i(TAG, "sing-box started")
             startCommandClient(generation)
         } catch (error: Exception) {
+            if (attempt.cancelled) return
             Log.e(TAG, "Failed to start sing-box", error)
             cleanupResources()
             publishState(
@@ -258,8 +271,13 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
             )
             stopSelfResult(startId)
         } finally {
-            configFile.delete()
+            if (startup === attempt) startup = null
+            attempt.configFile.delete()
         }
+    }
+
+    private fun cancelStartup() {
+        synchronized(commandClientLock) { startup?.cancel() }
     }
 
     private fun startCommandClient(generation: Int) {
@@ -434,11 +452,14 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
     }
 
     override fun onDestroy() {
+        cancelStartup()
         lifecycleExecutor.shutdownNow()
         synchronized(commandClientLock) {
             runGeneration++
         }
         cleanupResources()
+        startup?.configFile?.delete()
+        startup = null
         if (lifecycleState != LifecycleState.ERROR &&
             lifecycleState != LifecycleState.STOPPED
         ) {
@@ -448,6 +469,7 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
     }
 
     override fun onRevoke() {
+        cancelStartup()
         lifecycleExecutor.execute { stopBox() }
     }
 
@@ -842,6 +864,7 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
 
     override fun serviceStop() {
         if (!lifecycleExecutor.isShutdown) {
+            cancelStartup()
             lifecycleExecutor.execute { stopBox() }
         }
     }
