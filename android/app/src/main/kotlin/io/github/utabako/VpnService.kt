@@ -1,6 +1,5 @@
 package io.github.utabako
 
-import android.app.Notification as AndroidNotification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -177,11 +176,7 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(
-            NOTIFICATION_ID,
-            vpnNotification(lifecycleState),
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
+        startForeground()
         when (intent?.action) {
             ACTION_START -> {
                 val configPath = intent.getStringExtra(EXTRA_CONFIG_PATH)
@@ -208,7 +203,7 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
         return START_NOT_STICKY
     }
 
-    private fun vpnNotification(state: LifecycleState): AndroidNotification {
+    private fun startForeground() {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
@@ -223,18 +218,19 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
             Intent(this, VpnService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
             .setContentTitle("Utabako")
-            .setContentText(if (state == LifecycleState.STARTED) "已连接" else "正在连接…")
+            .setContentText("VPN 服务")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(openIntent)
-            .addAction(
-                android.R.drawable.ic_delete,
-                if (state == LifecycleState.STARTED) "断开" else "取消",
-                disconnectIntent
-            )
+            .addAction(android.R.drawable.ic_delete, "停止", disconnectIntent)
             .setOngoing(true)
             .build()
+        startForeground(
+            NOTIFICATION_ID,
+            notification,
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
     }
 
     @Synchronized
@@ -446,10 +442,6 @@ class VpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler 
                 trafficHistory = emptyList()
             }
             lifecycleState = state
-        }
-        if (state == LifecycleState.STARTED) {
-            getSystemService(NotificationManager::class.java)
-                .notify(NOTIFICATION_ID, vpnNotification(state))
         }
         sendBroadcast(
             Intent(ACTION_STATE_CHANGED).apply {
